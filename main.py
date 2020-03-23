@@ -4,6 +4,8 @@ import math
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.optim as optim
+from adabound import AdaBound
 
 import data
 import model
@@ -11,41 +13,41 @@ import model
 from utils import batchify, get_batch, repackage_hidden
 
 parser = argparse.ArgumentParser(description='PyTorch PennTreeBank RNN/LSTM Language Model')
-parser.add_argument('--data', type=str, default='data/penn/',
+parser.add_argument('--data', type=str, default='data/ptb/',
                     help='location of the data corpus')
 parser.add_argument('--model', type=str, default='LSTM',
                     help='type of recurrent net (LSTM, QRNN, GRU)')
-parser.add_argument('--emsize', type=int, default=400,
+parser.add_argument('--emsize', type=int, default=1500,
                     help='size of word embeddings')
-parser.add_argument('--nhid', type=int, default=1150,
+parser.add_argument('--nhid', type=int, default=1500,
                     help='number of hidden units per layer')
 parser.add_argument('--nlayers', type=int, default=3,
                     help='number of layers')
-parser.add_argument('--lr', type=float, default=30,
+parser.add_argument('--lr', type=float, default=0.1,
                     help='initial learning rate')
-parser.add_argument('--clip', type=float, default=0.25,
-                    help='gradient clipping')
-parser.add_argument('--epochs', type=int, default=8000,
+# parser.add_argument('--clip', type=float, default=0.25,
+#                     help='gradient clipping')
+parser.add_argument('--epochs', type=int, default=200,
                     help='upper epoch limit')
 parser.add_argument('--batch_size', type=int, default=80, metavar='N',
                     help='batch size')
 parser.add_argument('--bptt', type=int, default=70,
                     help='sequence length')
-parser.add_argument('--dropout', type=float, default=0.4,
+parser.add_argument('--dropout', type=float, default=0,
                     help='dropout applied to layers (0 = no dropout)')
-parser.add_argument('--dropouth', type=float, default=0.3,
+parser.add_argument('--dropouth', type=float, default=0,
                     help='dropout for rnn layers (0 = no dropout)')
-parser.add_argument('--dropouti', type=float, default=0.65,
+parser.add_argument('--dropouti', type=float, default=0,
                     help='dropout for input embedding layers (0 = no dropout)')
-parser.add_argument('--dropoute', type=float, default=0.1,
+parser.add_argument('--dropoute', type=float, default=0,
                     help='dropout to remove words from embedding layer (0 = no dropout)')
-parser.add_argument('--wdrop', type=float, default=0.5,
+parser.add_argument('--wdrop', type=float, default=0,
                     help='amount of weight dropout to apply to the RNN hidden to hidden matrix')
 parser.add_argument('--seed', type=int, default=1111,
                     help='random seed')
-parser.add_argument('--nonmono', type=int, default=5,
+parser.add_argument('--nonmono', type=int, default=1111,
                     help='random seed')
-parser.add_argument('--cuda', action='store_false',
+parser.add_argument('--cuda', action='store_true',
                     help='use CUDA')
 parser.add_argument('--log-interval', type=int, default=200, metavar='N',
                     help='report interval')
@@ -56,14 +58,23 @@ parser.add_argument('--alpha', type=float, default=2,
                     help='alpha L2 regularization on RNN activation (alpha = 0 means no regularization)')
 parser.add_argument('--beta', type=float, default=1,
                     help='beta slowness regularization applied on RNN activiation (beta = 0 means no regularization)')
-parser.add_argument('--wdecay', type=float, default=1.2e-6,
+parser.add_argument('--wdecay', type=float, default=5e-4,
                     help='weight decay applied to all weights')
 parser.add_argument('--resume', type=str,  default='',
                     help='path of model to resume')
-parser.add_argument('--optimizer', type=str,  default='sgd',
-                    help='optimizer to use (sgd, adam)')
 parser.add_argument('--when', nargs="+", type=int, default=[-1],
                     help='When (which epochs) to divide the learning rate by 10 - accepts multiple')
+parser.add_argument('--optim', default='sgd', type=str, help='optimizer',
+                    choices=['sgd', 'adagrad', 'adam', 'amsgrad', 'adabound', 'amsbound'])
+parser.add_argument('--momentum', default=0.9, type=float, help='momentum term')
+parser.add_argument('--beta1', default=0.9, type=float, help='Adam coefficients beta_1')
+parser.add_argument('--beta2', default=0.999, type=float, help='Adam coefficients beta_2')
+parser.add_argument('--final_lr', default=0.1, type=float,
+                    help='final learning rate of AdaBound')
+parser.add_argument('--gamma', default=1e-3, type=float,)
+parser.add_argument('--ita',default=1e-2, type=float)
+parser.add_argument('--weight_decay', default=5e-4, type=float,
+                    help='weight decay for optimizers')
 args = parser.parse_args()
 args.tied = True
 
@@ -172,7 +183,7 @@ def train():
     # Turn on training mode which enables dropout.
     if args.model == 'QRNN': model.reset()
     total_loss = 0
-    start_time = time.time()
+    # start_time = time.time()
     ntokens = len(corpus.dictionary)
     hidden = model.init_hidden(args.batch_size)
     batch, i = 0, 0
@@ -204,51 +215,70 @@ def train():
         loss.backward()
 
         # `clip_grad_norm` helps prevent the exploding gradient problem in RNNs / LSTMs.
-        if args.clip: torch.nn.utils.clip_grad_norm_(params, args.clip)
+        # if args.clip: torch.nn.utils.clip_grad_norm_(params, args.clip)
         optimizer.step()
 
         total_loss += raw_loss.data
         optimizer.param_groups[0]['lr'] = lr2
-        if batch % args.log_interval == 0 and batch > 0:
-            cur_loss = total_loss.item() / args.log_interval
-            elapsed = time.time() - start_time
-            print('| epoch {:3d} | {:5d}/{:5d} batches | lr {:05.5f} | ms/batch {:5.2f} | '
-                    'loss {:5.2f} | ppl {:8.2f} | bpc {:8.3f}'.format(
-                epoch, batch, len(train_data) // args.bptt, optimizer.param_groups[0]['lr'],
-                elapsed * 1000 / args.log_interval, cur_loss, math.exp(cur_loss), cur_loss / math.log(2)))
-            total_loss = 0
-            start_time = time.time()
+        # if batch % args.log_interval == 0 and batch > 0:
+        # total_loss = 0
+            # start_time = time.time()
         ###
         batch += 1
         i += seq_len
 
+    train_loss = total_loss.item() / batch
+    # elapsed = time.time() - start_time
+    print('train_loss  {:5.2f} | train_ppl {:8.2f} | train_bpc {:8.3f}'.format(
+        train_loss, math.exp(train_loss), train_loss / math.log(2)))
 # Loop over epochs.
 lr = args.lr
 best_val_loss = []
 stored_loss = 100000000
 
+def create_optimizer(args, model_params):
+    if args.optim == 'sgd':
+        return optim.SGD(model_params, args.lr, momentum=args.momentum,
+                         weight_decay=args.weight_decay)
+    elif args.optim == 'adagrad':
+        return optim.Adagrad(model_params, args.lr, weight_decay=args.weight_decay)
+    elif args.optim == 'adam':
+        return optim.Adam(model_params, args.lr, betas=(args.beta1, args.beta2),
+                          weight_decay=args.weight_decay)
+    elif args.optim == 'amsgrad':
+        return optim.Adam(model_params, args.lr, betas=(args.beta1, args.beta2),
+                          weight_decay=args.weight_decay, amsgrad=True)
+    elif args.optim == 'adabound':
+        return AdaBound(model_params, args.lr, betas=(args.beta1, args.beta2),
+                        final_lr=args.final_lr, gamma=args.gamma,
+                        weight_decay=args.weight_decay)
+    else:
+        assert args.optim == 'amsbound'
+        return AdaBound(model_params, args.lr, betas=(args.beta1, args.beta2),
+                        final_lr=args.final_lr, gamma=args.gamma,
+                        weight_decay=args.weight_decay, amsbound=True)
+
 # At any point you can hit Ctrl + C to break out of training early.
 try:
-    optimizer = None
-    # Ensure the optimizer is optimizing params, which includes both the model's weights as well as the criterion's weight (i.e. Adaptive Softmax)
-    if args.optimizer == 'sgd':
-        optimizer = torch.optim.SGD(params, lr=args.lr, weight_decay=args.wdecay)
-    if args.optimizer == 'adam':
-        optimizer = torch.optim.Adam(params, lr=args.lr, weight_decay=args.wdecay)
+    optimizer = create_optimizer(args, model.parameters())
     for epoch in range(1, args.epochs+1):
         epoch_start_time = time.time()
         train()
+        print("epoch:" + str(epoch))
         if 't0' in optimizer.param_groups[0]:
             tmp = {}
             for prm in model.parameters():
                 tmp[prm] = prm.data.clone()
                 prm.data = optimizer.state[prm]['ax'].clone()
 
+            test_loss = evaluate(test_data, test_batch_size)
+            print('test loss {:5.2f} | test ppl {:8.2f} | test bpc {:8.3f}'.format(
+                test_loss, math.exp(test_loss), test_loss / math.log(2)))
             val_loss2 = evaluate(val_data)
             print('-' * 89)
-            print('| end of epoch {:3d} | time: {:5.2f}s | valid loss {:5.2f} | '
+            print(' valid loss {:5.2f} | '
                 'valid ppl {:8.2f} | valid bpc {:8.3f}'.format(
-                    epoch, (time.time() - epoch_start_time), val_loss2, math.exp(val_loss2), val_loss2 / math.log(2)))
+                    val_loss2, math.exp(val_loss2), val_loss2 / math.log(2)))
             print('-' * 89)
 
             if val_loss2 < stored_loss:
@@ -262,9 +292,9 @@ try:
         else:
             val_loss = evaluate(val_data, eval_batch_size)
             print('-' * 89)
-            print('| end of epoch {:3d} | time: {:5.2f}s | valid loss {:5.2f} | '
+            print(' valid loss {:5.2f} | '
                 'valid ppl {:8.2f} | valid bpc {:8.3f}'.format(
-              epoch, (time.time() - epoch_start_time), val_loss, math.exp(val_loss), val_loss / math.log(2)))
+              val_loss, math.exp(val_loss), val_loss / math.log(2)))
             print('-' * 89)
 
             if val_loss < stored_loss:
@@ -292,8 +322,4 @@ except KeyboardInterrupt:
 model_load(args.save)
 
 # Run on test data.
-test_loss = evaluate(test_data, test_batch_size)
-print('=' * 89)
-print('| End of training | test loss {:5.2f} | test ppl {:8.2f} | test bpc {:8.3f}'.format(
-    test_loss, math.exp(test_loss), test_loss / math.log(2)))
-print('=' * 89)
+
