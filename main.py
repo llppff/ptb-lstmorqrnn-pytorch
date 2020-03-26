@@ -263,8 +263,8 @@ try:
     optimizer = create_optimizer(args, model.parameters())
     for epoch in range(1, args.epochs+1):
         epoch_start_time = time.time()
-        train()
         print("epoch:" + str(epoch))
+        train()
         if 't0' in optimizer.param_groups[0]:
             tmp = {}
             for prm in model.parameters():
