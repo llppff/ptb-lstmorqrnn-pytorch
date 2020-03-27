@@ -32,7 +32,7 @@ parser.add_argument('--epochs', type=int, default=200,
                     help='upper epoch limit')
 parser.add_argument('--batch_size', type=int, default=20, metavar='N',
                     help='batch size')
-parser.add_argument('--bptt', type=int, default=70,
+parser.add_argument('--bptt', type=int, default=20,
                     help='sequence length')
 parser.add_argument('--dropout', type=float, default=0,
                     help='dropout applied to layers (0 = no dropout)')
@@ -125,8 +125,10 @@ def evaluate(data_source, batch_size=10):
     total_loss = 0
     ntokens = len(corpus.dictionary)
     hidden = model.init_hidden(batch_size)
+    print("data_source.size(0):" + str(data_source.size(0)))
     for i in range(0, data_source.size(0) - 1, args.bptt):
         data, targets = get_batch(data_source, i, args, evaluation=True)
+        print("data.size(0):{}, data.size(1):{},targets.size(0):{},targets.size(1):{}".format(data.size(0),data.size(1),targets.size(0), targets.size(1)))
         output, hidden = model(data, hidden)
         # output_flat = output.view(-1, ntokens)
         # total_loss += len(data) * criterion(output_flat, targets).data
@@ -143,6 +145,7 @@ def train():
     ntokens = len(corpus.dictionary)
     hidden = model.init_hidden(args.batch_size)
     batch, i = 0, 0
+    print("train_data.size(0):" + str(train_data.size(0)))
     while i < train_data.size(0) - 1 - 1:
         bptt = args.bptt if np.random.random() < 0.95 else args.bptt / 2.
         # Prevent excessively small or negative sequence lengths
@@ -154,6 +157,11 @@ def train():
         # optimizer.param_groups[0]['lr'] = lr2 * seq_len / args.bptt
         model.train()
         data, targets = get_batch(train_data, i, args, seq_len=seq_len)
+        print("data.size(0):{}, data.size(1):{},targets.size(0):{}".format(data.size(0),data.size(1), targets.size(0)))
+        print("data:")
+        print(data)
+        print("targaets:")
+        print(targets)
 
         # Starting each batch, we detach the hidden state from how it was previously produced.
         # If we didn't, the model would try backpropagating all the way to start of the dataset.
@@ -161,8 +169,9 @@ def train():
         optimizer.zero_grad()
 
         output, hidden, rnn_hs, dropped_rnn_hs = model(data, hidden, return_h=True)
-        # raw_loss = criterion(output.view(-1, ntokens), targets)
-        raw_loss = criterion(output, targets)
+        print("output.size(0):{}".format(output.size(0)))
+        raw_loss = criterion(output, targets.view(-1))
+        # raw_loss = criterion(output, targets)
 
         loss = raw_loss
         # Activiation Regularization
